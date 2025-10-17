@@ -1,0 +1,2150 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<!--
+    普普風班級榮譽點數系統 V4.1
+    
+    系統模式說明：
+    1. 家長模式（預設）：直接開啟HTML文件，僅能查看學生點數，無法修改
+       - 特色：頂部綠色橫幅、禁用所有互動功能、隱藏管理按鈕
+       - 適合：分享給家長查看孩子的點數狀況
+    
+    2. 教師模式：網址加上 ?mode=teacher 參數
+       - 特色：完整管理功能、可加扣分、管理學生、匯出成績等
+       - 適合：教師進行班級管理
+       - 範例：file:///path/to/file.html?mode=teacher
+    
+    使用方式：
+    - 教師：在網址後加上 ?mode=teacher 進入管理模式
+    - 家長：使用教師模式下生成的QR碼或連結，會自動返回家長檢視模式
+-->
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>普普風班級榮譽點數系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        /* 自定義 Pop Art 風格 */
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background-color: #fef3c7; /* 溫暖的黃色背景 */
+        }
+        .font-anton {
+            font-family: 'Anton', sans-serif;
+            letter-spacing: 0.05em;
+        }
+        .pop-shadow {
+            box-shadow: 8px 8px 0px black;
+        }
+        .pop-shadow-sm {
+            box-shadow: 4px 4px 0px black;
+        }
+        .pop-button {
+            transition: all 0.15s ease-out;
+        }
+        .pop-button:hover {
+            transform: translate(4px, 4px);
+            box-shadow: 4px 4px 0px black;
+        }
+        .pop-button:active {
+            transform: translate(8px, 8px);
+            box-shadow: none;
+        }
+        .modal-backdrop {
+            background-color: rgba(0,0,0,0.6);
+            backdrop-filter: blur(5px);
+        }
+        .student-card {
+            transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
+        }
+        .student-card:hover {
+            transform: scale(1.05) rotate(-1deg);
+            box-shadow: 12px 12px 0px rgba(0,0,0,0.8);
+        }
+        /* 點數增減動畫 */
+        .point-change-up {
+            animation: point-up 0.8s ease-out forwards;
+        }
+        .point-change-down {
+            animation: point-down 0.8s ease-out forwards;
+        }
+        @keyframes point-up {
+            0% { transform: translateY(0) scale(1); opacity: 1; color: #16a34a; } /* green-600 */
+            100% { transform: translateY(-40px) scale(1.5); opacity: 0; }
+        }
+        @keyframes point-down {
+            0% { transform: translateY(0) scale(1); opacity: 1; color: #dc2626; } /* red-600 */
+            100% { transform: translateY(40px) scale(1.5); opacity: 0; }
+        }
+        /* 分頁樣式 */
+        .tab-button {
+            transition: all 0.2s ease-out;
+        }
+        .tab-button:not(.active-tab):hover {
+            transform: translateY(-2px);
+        }
+        .active-tab {
+            background-color: #facc15 !important; /* yellow-400 */
+            transform: translateY(-2px);
+            box-shadow: 0 4px 0 black;
+        }
+        .group-card {
+            transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
+        }
+        .group-card:hover {
+            transform: scale(1.02) rotate(-0.5deg);
+            box-shadow: 12px 12px 0px rgba(0,0,0,0.8);
+        }
+        /* 錯誤閃爍動畫 */
+        .error-flash {
+            animation: error-flash 0.5s ease-in-out 6;
+        }
+        @keyframes error-flash {
+            0%, 100% { background-color: transparent; color: inherit; }
+            50% { background-color: #fca5a5; color: #dc2626; }
+        }
+        /* 家長模式樣式 */
+        .parent-mode .student-card,
+        .parent-mode .group-card {
+            cursor: default !important;
+            pointer-events: none;
+        }
+        .parent-mode .student-card:hover,
+        .parent-mode .group-card:hover {
+            transform: none !important;
+            box-shadow: 8px 8px 0px black !important;
+        }
+        .parent-mode-banner {
+            background: linear-gradient(45deg, #10b981, #059669);
+            color: white;
+            padding: 8px;
+            text-align: center;
+            font-weight: bold;
+            border-bottom: 4px solid black;
+        }
+    </style>
+</head>
+<body class="antialiased text-gray-800">
+
+    <!-- 主容器 -->
+    <div id="app-container" class="container mx-auto p-4 md:p-8 max-w-7xl">
+
+        <!-- 頂部標題和控制按鈕 -->
+        <header class="flex justify-between items-center mb-8">
+            <div class="flex items-baseline gap-x-3 md:gap-x-4">
+                <h1 id="class-name-title" class="font-anton text-4xl md:text-6xl text-black drop-shadow-[4px_4px_0px_#facc15]">Classroom Points!</h1>
+                <span class="font-normal text-gray-600 text-sm md:text-base whitespace-nowrap">(Made by 阿剛老師)</span>
+            </div>
+            <div class="flex items-center space-x-2 md:space-x-4">
+                <button id="sort-btn" class="text-4xl hover:scale-110 transition-transform" title="目前：按姓名排序，點擊切換為按分數排序">★</button>
+                <button id="parent-link-btn" class="text-4xl hover:scale-110 transition-transform" title="生成家長檢視連結">👨‍👩‍👧‍👦</button>
+                <button id="teacher-panel-btn" class="text-4xl hover:scale-110 transition-transform">🧑‍🏫</button>
+                <button id="help-btn" class="text-4xl hover:scale-110 transition-transform">❓</button>
+            </div>
+        </header>
+
+        <!-- 教師管理面板 (預設隱藏) -->
+        <div id="control-panel" class="bg-blue-400 border-4 border-black p-4 rounded-lg pop-shadow mb-8 flex-wrap gap-4 justify-center hidden">
+            <button id="manage-student-btn" class="pop-button pop-shadow-sm bg-green-400 border-2 border-black rounded-md px-6 py-2 font-bold text-lg">管理學生</button>
+            <button id="manage-avatars-btn" class="pop-button pop-shadow-sm bg-cyan-400 border-2 border-black rounded-md px-6 py-2 font-bold text-lg">上傳頭像</button>
+            <button id="manage-behaviors-btn" class="pop-button pop-shadow-sm bg-yellow-400 border-2 border-black rounded-md px-6 py-2 font-bold text-lg">管理行為</button>
+            <button id="export-grades-btn" class="pop-button pop-shadow-sm bg-purple-500 text-white border-2 border-black rounded-md px-6 py-2 font-bold text-lg">匯出成績</button>
+            <button id="reset-points-btn" class="pop-button pop-shadow-sm bg-red-500 border-2 border-black rounded-md px-6 py-2 font-bold text-lg text-white">重設點數</button>
+        </div>
+
+        <!-- 分頁導航 -->
+        <div id="tabs-container" class="mb-8 hidden">
+            <div class="flex border-b-4 border-black">
+                <button id="students-tab" class="tab-button active-tab px-6 py-3 font-bold text-lg bg-yellow-400 border-4 border-black border-b-0 rounded-t-lg mr-2">學生</button>
+                <button id="groups-tab" class="tab-button px-6 py-3 font-bold text-lg bg-gray-300 border-4 border-black border-b-0 rounded-t-lg hover:bg-gray-200">分組</button>
+            </div>
+        </div>
+
+        <!-- 學生檢視 -->
+        <div id="students-view" class="tab-content">
+            <div id="student-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
+                <!-- 學生卡片將會動態插入這裡 -->
+            </div>
+        </div>
+
+        <!-- 分組檢視 -->
+        <div id="groups-view" class="tab-content hidden">
+            <div id="groups-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- 分組卡片將會動態插入這裡 -->
+            </div>
+        </div>
+
+        <!-- 初始提示/載入畫面 -->
+        <div id="initial-prompt" class="text-center py-20">
+            <p id="loading-text" class="text-2xl font-bold">正在從 Google Sheet 載入資料...</p>
+            <div id="spinner" class="animate-spin rounded-full h-12 w-12 border-b-4 border-black mx-auto mt-4"></div>
+            <p id="setup-prompt" class="hidden mt-4 text-lg">看起來是第一次使用！請在程式碼中更新 gasUrl 變數為您的 Google Apps Script 網址。</p>
+        </div>
+
+    </div>
+
+    <!-- 所有彈出視窗 (Modals) -->
+
+
+    <!-- 設定 Modal -->
+    <div id="settings-modal" class="fixed inset-0 modal-backdrop flex items-center justify-center p-4 hidden z-50">
+        <div class="bg-yellow-300 w-full max-w-md p-6 border-4 border-black rounded-lg pop-shadow">
+            <h2 class="font-anton text-3xl mb-4">設定 GAS 網址</h2>
+            <p class="mb-4">請貼上您從 Google Apps Script 發布後取得的網頁應用程式網址。</p>
+            <input type="url" id="gas-url-input" class="w-full p-2 border-2 border-black rounded-md mb-4" placeholder="https://script.google.com/macros/s/...">
+            <div class="flex justify-end space-x-4">
+                <button id="cancel-settings-btn" class="pop-button pop-shadow-sm bg-gray-300 border-2 border-black rounded-md px-6 py-2 font-bold">取消</button>
+                <button id="save-settings-btn" class="pop-button pop-shadow-sm bg-blue-500 text-white border-2 border-black rounded-md px-6 py-2 font-bold">儲存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 說明 Modal -->
+    <div id="help-modal" class="fixed inset-0 modal-backdrop flex items-center justify-center p-4 hidden z-50">
+        <div class="bg-white w-full max-w-3xl p-6 border-4 border-black rounded-lg pop-shadow flex flex-col" style="height: 90vh;">
+            <h2 class="font-anton text-3xl mb-4 flex-shrink-0">設定說明</h2>
+            <div class="prose max-w-none overflow-y-auto flex-grow pr-2">
+                <h4>步驟 1：建立 Google 試算表</h4>
+                <ol>
+                    <li>前往 <a href="https://sheets.new" target="_blank" class="text-blue-600 font-bold">sheets.new</a> 建立一份新的 Google 試算表。</li>
+                    <li>為您的試算表命名，例如「班級點數系統」。</li>
+                    <li><strong>✨ 新功能：</strong>系統會自動建立所需的工作表（Students, Behaviors, Log, Config）及預設資料，包含兩位範例學生。</li>
+                    <li><strong>可選：</strong>如果要修改班級名稱，可在 <code>Config</code> 工作表的 A1 格輸入您的班級名稱。</li>
+                </ol>
+
+                <h4>步驟 2：建立 Google Apps Script (GAS)</h4>
+                <ol>
+                    <li>在試算表選單中，點擊「擴充功能」 > 「Apps Script」。</li>
+                    <li>刪除指令碼編輯器中所有預設的程式碼。</li>
+                    <li>將下方的所有程式碼複製並貼到編輯器中。</li>
+                    <li>點擊上方的「儲存專案」圖示 (💾)。</li>
+                </ol>
+                
+                <div class="relative bg-gray-800 text-white p-4 rounded-md my-4">
+                    <button id="copy-gas-code-btn" class="absolute top-2 right-2 bg-gray-600 hover:bg-gray-500 text-white font-bold py-1 px-3 rounded text-sm">複製</button>
+                    <pre><code id="gas-code-block" class="text-sm whitespace-pre-wrap">
+function doPost(e) {
+  try {
+    const postData = JSON.parse(e.postData.contents);
+    const action = postData.action;
+    const payload = postData.payload;
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+    switch (action) {
+      case "loadData":
+        return handleLoadData(ss);
+      case "addMultipleStudents":
+        return handleAddMultipleStudents(ss, payload);
+      case "deleteStudent":
+        return handleDeleteStudent(ss, payload);
+      case "updatePoints":
+        return handleUpdatePoints(ss, payload);
+      case "getHistory":
+        return handleGetHistory(ss, payload);
+      case "resetAllPoints":
+        return handleResetAllPoints(ss);
+      case "manageBehaviors":
+        return handleManageBehaviors(ss, payload);
+      case "updateMultiplePoints":
+        return handleUpdateMultiplePoints(ss, payload);
+      case "updateStudentAvatar":
+        return handleUpdateStudentAvatar(ss, payload);
+      default:
+        return createJsonResponse({ status: "error", message: "Unknown action: " + action });
+    }
+  } catch (err) {
+    return createJsonResponse({ status: "error", message: err.message, stack: err.stack });
+  }
+}
+
+function createJsonResponse(data) {
+  return ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleLoadData(ss) {
+  // 自動建立所需的工作表
+  let studentSheet = ss.getSheetByName("Students");
+  let behaviorSheet = ss.getSheetByName("Behaviors");
+  let logSheet = ss.getSheetByName("Log");
+  let configSheet = ss.getSheetByName("Config");
+
+  // 如果工作表不存在，則建立它們
+  if (!studentSheet) {
+    studentSheet = ss.insertSheet("Students");
+  }
+  if (!behaviorSheet) {
+    behaviorSheet = ss.insertSheet("Behaviors");
+  }
+  if (!logSheet) {
+    logSheet = ss.insertSheet("Log");
+  }
+  if (!configSheet) {
+    configSheet = ss.insertSheet("Config");
+  }
+
+  // 初始化 Config 工作表
+  if (configSheet.getLastRow() === 0) {
+    configSheet.getRange("A1").setValue("我的班級");
+  }
+
+  // 初始化 Students 工作表
+  if (studentSheet.getLastRow() === 0) {
+    // 設定標題列
+    studentSheet.getRange("A1:E1").setValues([["id", "name", "points", "avatar", "group"]]);
+    
+    // 生成範例學生的預設頭像
+    const generateAvatar = (seed) => {
+      const colors = ['#ff6384', '#36a2eb', '#ffce56', '#4bc0c0', '#9966ff', '#ff9f40'];
+      const bgColor = colors[Math.abs(seed.split('').reduce((a, b) => a + b.charCodeAt(0), 0)) % colors.length];
+      return `data:image/svg+xml,${encodeURIComponent(`<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100" rx="20" fill="${bgColor}" /><circle cx="35" cy="40" r="8" fill="white"/><circle cx="35" cy="40" r="4" fill="black"/><circle cx="65" cy="40" r="8" fill="white"/><circle cx="65" cy="40" r="4" fill="black"/><path d="M35 70 Q 50 85, 65 70" stroke="white" stroke-width="5" fill="none"/></svg>`)}`;
+    };
+    
+    // 新增兩個範例學生
+    const sampleStudents = [
+      [Utilities.getUuid(), "王小明", 0, generateAvatar("王小明"), "第一組"],
+      [Utilities.getUuid(), "陳小華", 0, generateAvatar("陳小華"), "第二組"]
+    ];
+    studentSheet.getRange(2, 1, sampleStudents.length, 5).setValues(sampleStudents);
+  }
+
+  // 初始化 Behaviors 工作表
+  if (behaviorSheet.getLastRow() === 0) {
+    const defaultBehaviors = [
+      ["name", "points", "type"],
+      ["積極參與", 1, "positive"], 
+      ["幫助同學", 1, "positive"], 
+      ["準時交作業", 2, "positive"],
+      ["團隊合作", 1, "positive"], 
+      ["創意表現", 2, "positive"],
+      ["上課分心", -1, "negative"], 
+      ["未交作業", -2, "negative"],
+      ["干擾秩序", -1, "negative"],
+      ["遲到早退", -1, "negative"]
+    ];
+    behaviorSheet.getRange(1, 1, defaultBehaviors.length, 3).setValues(defaultBehaviors);
+  }
+
+  // 初始化 Log 工作表
+  if (logSheet.getLastRow() === 0) {
+    logSheet.getRange("A1:D1").setValues([["timestamp", "studentId", "behaviorName", "points"]]);
+  }
+
+  // 讀取資料
+  const students = studentSheet.getLastRow() > 1 ? studentSheet.getRange(2, 1, studentSheet.getLastRow() - 1, 5).getValues() : [];
+  const behaviors = behaviorSheet.getLastRow() > 1 ? behaviorSheet.getRange(2, 1, behaviorSheet.getLastRow() - 1, 3).getValues() : [];
+  const className = configSheet.getRange("A1").getValue() || "我的班級";
+
+  const data = {
+    className: className,
+    students: students.map(row => ({ id: row[0], name: row[1], points: Number(row[2]) || 0, avatar: row[3], group: row[4] || '' })),
+    behaviors: behaviors.map(row => ({ name: row[0], points: Number(row[1]) || 0, type: row[2] }))
+  };
+  return createJsonResponse({ status: "success", data: data });
+}
+
+function handleAddMultipleStudents(ss, payload) {
+  let studentSheet = ss.getSheetByName("Students");
+  if (!studentSheet) {
+    studentSheet = ss.insertSheet("Students");
+  }
+  if (studentSheet.getLastRow() === 0) {
+    studentSheet.getRange("A1:E1").setValues([["id", "name", "points", "avatar", "group"]]);
+  }
+  
+  const newStudentsPayload = payload.students;
+  const newStudentsForSheet = [];
+  const newStudentsForState = [];
+
+  newStudentsPayload.forEach(student => {
+    const newId = Utilities.getUuid();
+    const newStudent = { id: newId, name: student.name, points: 0, avatar: student.avatar, group: student.group || '' };
+    newStudentsForSheet.push([newStudent.id, newStudent.name, newStudent.points, newStudent.avatar, newStudent.group]);
+    newStudentsForState.push(newStudent);
+  });
+
+  if (newStudentsForSheet.length > 0) {
+    studentSheet.getRange(studentSheet.getLastRow() + 1, 1, newStudentsForSheet.length, 5).setValues(newStudentsForSheet);
+  }
+  
+  return createJsonResponse({ status: "success", data: newStudentsForState });
+}
+
+function handleDeleteStudent(ss, payload) {
+  const { studentId } = payload;
+  const studentSheet = ss.getSheetByName("Students");
+  const studentData = studentSheet.getDataRange().getValues();
+  // 從後往前找，避免刪除時影響後續列的索引
+  for (let i = studentData.length - 1; i >= 1; i--) {
+    if (studentData[i][0] === studentId) {
+      studentSheet.deleteRow(i + 1);
+      return createJsonResponse({ status: "success", data: { deletedStudentId: studentId } });
+    }
+  }
+  return createJsonResponse({ status: "error", message: "Student not found to delete" });
+}
+
+function handleUpdatePoints(ss, payload) {
+  const { studentId, behaviorName, points } = payload;
+  let studentSheet = ss.getSheetByName("Students");
+  let logSheet = ss.getSheetByName("Log");
+  
+  if (!studentSheet) {
+    studentSheet = ss.insertSheet("Students");
+  }
+  if (!logSheet) {
+    logSheet = ss.insertSheet("Log");
+  }
+
+  if (logSheet.getLastRow() === 0) {
+    logSheet.getRange("A1:D1").setValues([["timestamp", "studentId", "behaviorName", "points"]]);
+  }
+  logSheet.appendRow([new Date(), studentId, behaviorName, points]);
+
+  const studentData = studentSheet.getDataRange().getValues();
+  for (let i = 1; i < studentData.length; i++) {
+    if (studentData[i][0] === studentId) {
+      const currentPoints = Number(studentData[i][2]) || 0;
+      const newPoints = currentPoints + Number(points);
+      studentSheet.getRange(i + 1, 3).setValue(newPoints);
+      return createJsonResponse({ status: "success", data: { studentId: studentId, newPoints: newPoints } });
+    }
+  }
+  return createJsonResponse({ status: "error", message: "Student not found" });
+}
+
+function handleGetHistory(ss, payload) {
+    let logSheet = ss.getSheetByName("Log");
+    if (!logSheet) {
+        logSheet = ss.insertSheet("Log");
+        logSheet.getRange("A1:D1").setValues([["timestamp", "studentId", "behaviorName", "points"]]);
+    }
+    if (logSheet.getLastRow() < 2) {
+        return createJsonResponse({ status: "success", data: [] });
+    }
+    const logData = logSheet.getRange(2, 1, logSheet.getLastRow() - 1, 4).getValues();
+    const history = logData
+        .filter(row => row[1] === payload.studentId)
+        .map(row => ({
+            timestamp: new Date(row[0]).toLocaleString('zh-TW'),
+            behaviorName: row[2],
+            points: row[3]
+        }))
+        .reverse();
+    return createJsonResponse({ status: "success", data: history });
+}
+
+function handleResetAllPoints(ss) {
+    let studentSheet = ss.getSheetByName("Students");
+    let logSheet = ss.getSheetByName("Log");
+    
+    if (!studentSheet) {
+        studentSheet = ss.insertSheet("Students");
+    }
+    if (!logSheet) {
+        logSheet = ss.insertSheet("Log");
+    }
+    
+    if (studentSheet.getLastRow() > 1) {
+        studentSheet.getRange(2, 3, studentSheet.getLastRow() - 1, 1).setValue(0);
+    }
+    if (logSheet.getLastRow() === 0) {
+      logSheet.getRange("A1:D1").setValues([["timestamp", "studentId", "behaviorName", "points"]]);
+    }
+    logSheet.appendRow([new Date(), "SYSTEM", "所有點數已重設", 0]);
+    return createJsonResponse({ status: "success", data: { success: true } });
+}
+
+function handleManageBehaviors(ss, payload) {
+    let behaviorSheet = ss.getSheetByName("Behaviors");
+    if (!behaviorSheet) {
+        behaviorSheet = ss.insertSheet("Behaviors");
+        behaviorSheet.getRange("A1:C1").setValues([["name", "points", "type"]]);
+    }
+    if (behaviorSheet.getLastRow() > 1) {
+        behaviorSheet.getRange(2, 1, behaviorSheet.getLastRow() - 1, 3).clearContent();
+    }
+    if (payload.behaviors.length > 0) {
+        const newBehaviorsData = payload.behaviors.map(b => [b.name, b.points, b.type]);
+        behaviorSheet.getRange(2, 1, newBehaviorsData.length, 3).setValues(newBehaviorsData);
+    }
+    return createJsonResponse({ status: "success", data: { success: true } });
+}
+
+function handleUpdateMultiplePoints(ss, payload) {
+    const { updates } = payload; // [{ studentId, behaviorName, points }, ...]
+    let studentSheet = ss.getSheetByName("Students");
+    let logSheet = ss.getSheetByName("Log");
+    
+    if (!studentSheet) {
+        studentSheet = ss.insertSheet("Students");
+    }
+    if (!logSheet) {
+        logSheet = ss.insertSheet("Log");
+    }
+    
+    if (logSheet.getLastRow() === 0) {
+        logSheet.getRange("A1:D1").setValues([["timestamp", "studentId", "behaviorName", "points"]]);
+    }
+    
+    // 批量記錄日誌
+    const logData = updates.map(update => [new Date(), update.studentId, update.behaviorName, update.points]);
+    if (logData.length > 0) {
+        logSheet.getRange(logSheet.getLastRow() + 1, 1, logData.length, 4).setValues(logData);
+    }
+    
+    // 批量更新學生分數
+    const studentData = studentSheet.getDataRange().getValues();
+    const updatedStudents = [];
+    
+    updates.forEach(update => {
+        for (let i = 1; i < studentData.length; i++) {
+            if (studentData[i][0] === update.studentId) {
+                const currentPoints = Number(studentData[i][2]) || 0;
+                const newPoints = currentPoints + Number(update.points);
+                studentData[i][2] = newPoints;
+                updatedStudents.push({ studentId: update.studentId, newPoints: newPoints });
+                break;
+            }
+        }
+    });
+    
+    // 更新試算表
+    studentSheet.getDataRange().setValues(studentData);
+    
+    return createJsonResponse({ status: "success", data: { updatedStudents: updatedStudents } });
+}
+
+function handleUpdateStudentAvatar(ss, payload) {
+    const { studentId, avatar } = payload;
+    let studentSheet = ss.getSheetByName("Students");
+    if (!studentSheet) {
+        studentSheet = ss.insertSheet("Students");
+        studentSheet.getRange("A1:E1").setValues([["id", "name", "points", "avatar", "group"]]);
+    }
+    const studentData = studentSheet.getDataRange().getValues();
+    
+    for (let i = 1; i < studentData.length; i++) {
+        if (studentData[i][0] === studentId) {
+            studentSheet.getRange(i + 1, 4).setValue(avatar); // 第4欄是avatar欄位
+            return createJsonResponse({ status: "success", data: { success: true } });
+        }
+    }
+    
+    return createJsonResponse({ status: "error", message: "Student not found for avatar update" });
+}
+                    </code></pre>
+                </div>
+
+                <h4>步驟 3：發布網頁應用程式</h4>
+                <ol>
+                    <li>在 Apps Script 編輯器右上角，點擊「部署」 > 「新增部署作業」。</li>
+                    <li>在「選取類型」旁，點擊齒輪圖示 ⚙️，選擇「網頁應用程式」。</li>
+                    <li>在「說明」欄位輸入「班級點數系統 v4.2 - 自動建表+頭像上傳」。</li>
+                    <li>在「執行身分」選擇「我」。</li>
+                    <li>在「誰可以存取」選擇「任何人」。<strong>(這是為了讓您的前端網頁能呼叫它，資料本身仍是安全的)</strong></li>
+                    <li>點擊「部署」。</li>
+                    <li>在彈出的視窗中，點擊「授權存取」，並同意 Google 的權限要求。</li>
+                    <li>最後，您會得到一個「網頁應用程式」的網址。<strong>複製這個網址</strong>。</li>
+                </ol>
+
+                <h4>步驟 4：設定本網頁</h4>
+                <ol>
+                    <li>在程式碼中找到 <code>gasUrl: 'demo'</code> 這一行。</li>
+                    <li>將 <code>'demo'</code> 更換為您剛才複製的 GAS 網址。</li>
+                    <li>儲存檔案並重新整理網頁。</li>
+                    <li>完成！您就可以開始使用了！</li>
+                </ol>
+            </div>
+            <div class="mt-4 text-right flex-shrink-0">
+                <button id="close-help-btn" class="pop-button pop-shadow-sm bg-blue-500 text-white border-2 border-black rounded-md px-6 py-2 font-bold">我懂了！</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 管理學生 Modal -->
+    <div id="manage-student-modal" class="fixed inset-0 modal-backdrop flex items-center justify-center p-4 hidden z-50">
+        <div class="bg-green-300 w-full max-w-md p-6 border-4 border-black rounded-lg pop-shadow flex flex-col" style="height: 80vh;">
+            <h2 class="font-anton text-3xl mb-4 flex-shrink-0">管理學生</h2>
+            
+            <!-- 新增學生區塊 -->
+            <div class="mb-4 pb-4 border-b-2 border-black">
+                <h3 class="font-bold text-xl mb-2">新增學生</h3>
+                <p class="mb-2 text-sm">請輸入學生姓名，每位學生佔一行。可以只輸入姓名或「姓名，分組」的格式。</p>
+                <textarea id="student-name-input" class="w-full h-24 p-2 border-2 border-black rounded-md mb-2" placeholder="王小明&#10;陳大華,第一組&#10;林美麗	第二組"></textarea>
+                <button id="confirm-add-student-btn" class="w-full pop-button pop-shadow-sm bg-blue-500 text-white border-2 border-black rounded-md px-6 py-2 font-bold">確認新增</button>
+            </div>
+
+            <!-- 刪除學生區塊 -->
+            <div class="flex-grow overflow-y-auto">
+                 <h3 class="font-bold text-xl mb-2">刪除學生</h3>
+                 <div id="delete-student-list" class="space-y-2 pr-2">
+                    <!-- 學生列表將動態插入此處 -->
+                 </div>
+            </div>
+
+            <div class="mt-4 text-right flex-shrink-0">
+                <button id="close-manage-student-btn" class="pop-button pop-shadow-sm bg-gray-300 border-2 border-black rounded-md px-6 py-2 font-bold">關閉</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 匯出成績 Modal -->
+    <div id="export-modal" class="fixed inset-0 modal-backdrop flex items-center justify-center p-4 hidden z-50">
+        <div class="bg-teal-300 w-full max-w-sm p-6 border-4 border-black rounded-lg pop-shadow">
+            <h2 class="font-anton text-3xl mb-4">匯出成績</h2>
+            <p class="mb-6">請選擇匯出格式：</p>
+            <div class="flex flex-col space-y-4">
+                <button id="export-original-btn" class="pop-button pop-shadow-sm bg-blue-500 text-white border-2 border-black rounded-md px-6 py-3 font-bold">按分組姓名順序匯出</button>
+                <button id="export-sorted-btn" class="pop-button pop-shadow-sm bg-green-500 text-white border-2 border-black rounded-md px-6 py-3 font-bold">按得分高低匯出</button>
+            </div>
+            <div class="mt-6 text-right">
+                <button id="cancel-export-btn" class="pop-button pop-shadow-sm bg-gray-300 border-2 border-black rounded-md px-6 py-2 font-bold">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 加減分 Modal -->
+    <div id="points-modal" class="fixed inset-0 modal-backdrop flex items-center justify-center p-4 hidden z-50">
+        <div class="bg-purple-300 w-full max-w-lg p-6 border-4 border-black rounded-lg pop-shadow">
+            <h2 id="points-modal-title" class="font-anton text-3xl mb-4 text-center">給予點數</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- 加分項目 -->
+                <div>
+                    <h3 class="font-bold text-xl text-green-700 mb-2">加分項目</h3>
+                    <div id="positive-behaviors" class="space-y-3 max-h-60 overflow-y-auto pr-2"></div>
+                </div>
+                <!-- 扣分項目 -->
+                <div>
+                    <h3 class="font-bold text-xl text-red-700 mb-2">待改進項目</h3>
+                    <div id="negative-behaviors" class="space-y-3 max-h-60 overflow-y-auto pr-2"></div>
+                </div>
+            </div>
+            <div class="mt-6 flex justify-center space-x-4">
+                 <button id="view-history-btn" class="pop-button pop-shadow-sm bg-yellow-400 border-2 border-black rounded-md px-4 py-2 font-bold">查看紀錄</button>
+                 <button id="close-points-modal-btn" class="pop-button pop-shadow-sm bg-gray-300 border-2 border-black rounded-md px-4 py-2 font-bold">關閉</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 歷史紀錄 Modal -->
+    <div id="history-modal" class="fixed inset-0 modal-backdrop flex items-center justify-center p-4 hidden z-50">
+        <div class="bg-pink-300 w-full max-w-md p-6 border-4 border-black rounded-lg pop-shadow flex flex-col" style="height: 70vh;">
+            <h2 id="history-modal-title" class="font-anton text-3xl mb-4 flex-shrink-0">歷史紀錄</h2>
+            <div id="history-list" class="flex-grow overflow-y-auto bg-white/50 p-2 rounded-md border-2 border-black">
+                <!-- 紀錄將插入此處 -->
+            </div>
+            <div class="mt-4 text-right flex-shrink-0">
+                <button id="close-history-modal-btn" class="pop-button pop-shadow-sm bg-blue-500 text-white border-2 border-black rounded-md px-6 py-2 font-bold">關閉</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 管理行為 Modal -->
+    <div id="manage-behaviors-modal" class="fixed inset-0 modal-backdrop flex items-center justify-center p-4 hidden z-50">
+        <div class="bg-orange-300 w-full max-w-2xl p-6 border-4 border-black rounded-lg pop-shadow flex flex-col" style="height: 80vh;">
+            <h2 class="font-anton text-3xl mb-4 flex-shrink-0">管理行為項目</h2>
+            <div class="flex-grow overflow-y-auto space-y-4" id="behavior-list-editor">
+                <!-- 行為編輯器將插入此處 -->
+            </div>
+            <div class="mt-4 pt-4 border-t-2 border-black flex-shrink-0 flex justify-between">
+                <button id="add-new-behavior-btn" class="pop-button pop-shadow-sm bg-green-400 border-2 border-black rounded-md px-4 py-2 font-bold">新增一項</button>
+                <div>
+                    <button id="cancel-behaviors-btn" class="pop-button pop-shadow-sm bg-gray-300 border-2 border-black rounded-md px-6 py-2 font-bold">取消</button>
+                    <button id="save-behaviors-btn" class="pop-button pop-shadow-sm bg-blue-500 text-white border-2 border-black rounded-md px-6 py-2 font-bold">儲存變更</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 家長模式連結 Modal -->
+    <div id="parent-link-modal" class="fixed inset-0 modal-backdrop flex items-center justify-center p-4 hidden z-50">
+        <div class="bg-green-300 w-full max-w-md p-6 border-4 border-black rounded-lg pop-shadow">
+            <h2 class="font-anton text-3xl mb-4 text-center">家長檢視連結</h2>
+            <div class="text-center mb-4">
+                <p class="mb-2 font-bold">掃描QR碼或複製連結分享給家長：</p>
+                <div id="qr-code-container" class="flex justify-center mb-4">
+                    <canvas id="qr-canvas" class="border-2 border-black"></canvas>
+                </div>
+                <div class="bg-white border-2 border-black rounded-md p-3 mb-4">
+                    <input type="text" id="parent-url-display" class="w-full text-sm text-center bg-transparent border-none outline-none" readonly>
+                </div>
+                <button id="copy-parent-url-btn" class="w-full pop-button pop-shadow-sm bg-blue-500 text-white border-2 border-black rounded-md px-6 py-3 font-bold mb-2">📋 複製連結</button>
+                <p class="text-xs text-gray-600">家長使用此連結只能檢視，無法修改點數</p>
+            </div>
+            <div class="text-right">
+                <button id="close-parent-link-btn" class="pop-button pop-shadow-sm bg-gray-300 border-2 border-black rounded-md px-6 py-2 font-bold">關閉</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 頭像管理 Modal -->
+    <div id="manage-avatars-modal" class="fixed inset-0 modal-backdrop flex items-center justify-center p-4 hidden z-50">
+        <div class="bg-cyan-300 w-full max-w-4xl p-6 border-4 border-black rounded-lg pop-shadow flex flex-col" style="height: 80vh;">
+            <h2 class="font-anton text-3xl mb-4 flex-shrink-0">學生頭像管理</h2>
+            <p class="text-sm mb-4 text-gray-700">點擊學生頭像即可上傳新圖片，圖片將自動壓縮為寬度200px</p>
+            
+            <!-- 學生頭像網格 -->
+            <div class="flex-grow overflow-y-auto">
+                <div id="avatar-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                    <!-- 學生頭像卡片將動態插入此處 -->
+                </div>
+            </div>
+            
+            <!-- 隱藏的文件上傳輸入 -->
+            <input type="file" id="avatar-file-input" accept="image/*" class="hidden">
+            
+            <div class="mt-4 text-right flex-shrink-0">
+                <button id="close-avatars-btn" class="pop-button pop-shadow-sm bg-gray-300 border-2 border-black rounded-md px-6 py-2 font-bold">關閉</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- 元素選擇 ---
+        const getEl = (id) => document.getElementById(id);
+        const app = {
+            modals: {
+                settings: getEl('settings-modal'),
+                help: getEl('help-modal'),
+                manageStudent: getEl('manage-student-modal'),
+                manageAvatars: getEl('manage-avatars-modal'),
+                export: getEl('export-modal'),
+                points: getEl('points-modal'),
+                history: getEl('history-modal'),
+                manageBehaviors: getEl('manage-behaviors-modal'),
+                parentLink: getEl('parent-link-modal'),
+            },
+            buttons: {
+                sort: getEl('sort-btn'),
+                teacherPanel: getEl('teacher-panel-btn'),
+                parentLink: getEl('parent-link-btn'),
+                settings: getEl('settings-btn'),
+                help: getEl('help-btn'),
+                saveSettings: getEl('save-settings-btn'),
+                cancelSettings: getEl('cancel-settings-btn'),
+                closeHelp: getEl('close-help-btn'),
+                copyGasCode: getEl('copy-gas-code-btn'),
+                manageStudent: getEl('manage-student-btn'),
+                closeManageStudent: getEl('close-manage-student-btn'),
+                confirmAddStudent: getEl('confirm-add-student-btn'),
+                manageAvatars: getEl('manage-avatars-btn'),
+                closeAvatars: getEl('close-avatars-btn'),
+                exportGrades: getEl('export-grades-btn'),
+                exportOriginal: getEl('export-original-btn'),
+                exportSorted: getEl('export-sorted-btn'),
+                cancelExport: getEl('cancel-export-btn'),
+                closePoints: getEl('close-points-modal-btn'),
+                viewHistory: getEl('view-history-btn'),
+                closeHistory: getEl('close-history-modal-btn'),
+                resetPoints: getEl('reset-points-btn'),
+                manageBehaviors: getEl('manage-behaviors-btn'),
+                saveBehaviors: getEl('save-behaviors-btn'),
+                cancelBehaviors: getEl('cancel-behaviors-btn'),
+                addNewBehavior: getEl('add-new-behavior-btn'),
+                copyParentUrl: getEl('copy-parent-url-btn'),
+                closeParentLink: getEl('close-parent-link-btn'),
+            },
+            inputs: {
+                gasUrl: getEl('gas-url-input'),
+                studentName: getEl('student-name-input'),
+                avatarFile: getEl('avatar-file-input'),
+            },
+            containers: {
+                controlPanel: getEl('control-panel'),
+                studentGrid: getEl('student-grid'),
+                groupsGrid: getEl('groups-grid'),
+                tabsContainer: getEl('tabs-container'),
+                studentsView: getEl('students-view'),
+                groupsView: getEl('groups-view'),
+                studentsTab: getEl('students-tab'),
+                groupsTab: getEl('groups-tab'),
+                initialPrompt: getEl('initial-prompt'),
+                loadingText: getEl('loading-text'),
+                setupPrompt: getEl('setup-prompt'),
+                spinner: getEl('spinner'),
+                positiveBehaviors: getEl('positive-behaviors'),
+                negativeBehaviors: getEl('negative-behaviors'),
+                historyList: getEl('history-list'),
+                behaviorListEditor: getEl('behavior-list-editor'),
+                deleteStudentList: getEl('delete-student-list'),
+                avatarGrid: getEl('avatar-grid'),
+            },
+            sounds: {
+                positive: () => new Tone.Synth({ oscillator: { type: 'sine' }, envelope: { attack: 0.01, decay: 0.2, release: 0.2 } }).toDestination().triggerAttackRelease("C5", "8n"),
+                negative: () => new Tone.Synth({ oscillator: { type: 'square' }, envelope: { attack: 0.01, decay: 0.3, release: 0.3 } }).toDestination().triggerAttackRelease("A2", "8n"),
+                click: () => new Tone.MembraneSynth({ pitchDecay: 0.01, octaves: 2 }).toDestination().triggerAttackRelease("C2", "8n", Tone.now())
+            },
+            titles: {
+                className: getEl('class-name-title'),
+                pointsModal: getEl('points-modal-title'),
+                historyModal: getEl('history-modal-title'),
+            }
+        };
+
+        // --- 模式檢測（預設為家長模式） ---
+        const urlParams = new URLSearchParams(window.location.search);
+        const isTeacherMode = urlParams.get('mode') === 'teacher';
+        const isParentMode = !isTeacherMode; // 預設為家長模式
+        
+        // 如果是家長模式，添加CSS類和橫幅
+        if (isParentMode) {
+            document.body.classList.add('parent-mode');
+            const banner = document.createElement('div');
+            banner.className = 'parent-mode-banner';
+            banner.textContent = '👨‍👩‍👧‍👦 家長檢視模式 - 僅供查看，無法修改';
+            document.body.insertBefore(banner, document.body.firstChild);
+        }
+
+        // --- 狀態管理 ---
+        let state = {
+            // 請在下方填入您的 Google Apps Script 網址（需要先部署 GAS 網頁應用程式）
+            // 例如：gasUrl: 'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec',
+            gasUrl: 'https://script.google.com/macros/s/AKfycbySL3nqKqeHcA_sMTk6FWxu5MkSbj2PUQZNSOYjZBOuUxkIExc6yk5SGN5xdgRv-C1yeQ/exec', // 請把 'demo' 更換為您的 GAS 網址
+            students: [],
+            behaviors: [],
+            groups: {},
+            isLoading: true,
+            currentStudentId: null,
+            currentGroupName: null,
+            className: 'Classroom Points!',
+            sortOrder: 'byName', // 'byName', 'byPoints', or 'byGroup'
+            activeTab: 'students', // 'students' or 'groups'
+            pendingOperations: new Map(), // 追蹤未同步的操作
+            retryQueue: [], // 重試佇列
+            isParentMode: isParentMode, // 家長模式狀態
+            isTeacherMode: isTeacherMode, // 教師模式狀態
+            
+            // 快取管理配置
+            cacheKey: 'classpoints_cache',
+            cacheTimestampKey: 'classpoints_cache_timestamp',
+            cacheDuration: 5 * 60 * 1000, // 5分鐘快取時間
+            
+            // 頭像上傳狀態
+            currentUploadingStudentId: null
+        };
+
+        // --- 快取管理函式 ---
+        const saveToCache = (data) => {
+            try {
+                localStorage.setItem(state.cacheKey, JSON.stringify(data));
+                localStorage.setItem(state.cacheTimestampKey, Date.now().toString());
+            } catch (error) {
+                console.warn('快取儲存失敗:', error);
+            }
+        };
+        
+        const loadFromCache = () => {
+            try {
+                const timestamp = localStorage.getItem(state.cacheTimestampKey);
+                const cachedData = localStorage.getItem(state.cacheKey);
+                
+                if (!timestamp || !cachedData) return null;
+                
+                const age = Date.now() - parseInt(timestamp);
+                if (age > state.cacheDuration) {
+                    // 快取過期，清除舊快取
+                    localStorage.removeItem(state.cacheKey);
+                    localStorage.removeItem(state.cacheTimestampKey);
+                    return null;
+                }
+                
+                return JSON.parse(cachedData);
+            } catch (error) {
+                console.warn('快取載入失敗:', error);
+                return null;
+            }
+        };
+        
+        const clearCache = () => {
+            localStorage.removeItem(state.cacheKey);
+            localStorage.removeItem(state.cacheTimestampKey);
+        };
+
+        const showCacheToast = (message, isError = false) => {
+            const toast = document.createElement('div');
+            toast.textContent = message;
+            toast.className = `fixed bottom-5 right-5 p-3 rounded-lg text-white font-bold z-50 ${isError ? 'bg-red-500' : 'bg-green-500'}`;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 2000);
+        };
+
+        // --- 通用函式 ---
+        const toggleModal = (modal, show) => {
+            modal.classList.toggle('hidden', !show);
+        };
+
+        const playSound = (soundPlayer) => {
+            if (typeof Tone === 'undefined') return;
+            if (Tone.context.state !== 'running') {
+                Tone.start().catch(e => console.error("Tone.js context 無法啟動", e));
+            }
+            try {
+                soundPlayer();
+            } catch (e) {
+                console.error("音效播放失敗:", e);
+            }
+        };
+
+        const exportToCsv = (studentData, filename) => {
+            let csvContent = "data:text/csv;charset=utf-8,\uFEFF"; // 加入 BOM 讓 Excel 正確顯示中文
+            csvContent += "分組,學生姓名,總得分\n";
+
+            studentData.forEach(student => {
+                const group = student.group || '未分組';
+                csvContent += `"${group}","${student.name}",${student.points}\n`;
+            });
+
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", filename);
+            document.body.appendChild(link); // Firefox 需要
+
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // --- 樂觀更新輔助函數 ---
+        const updateStudentPointsOptimistic = (studentId, pointsChange) => {
+            const student = state.students.find(s => s.id === studentId);
+            if (!student) return;
+            
+            const oldPoints = student.points;
+            const newPoints = oldPoints + pointsChange;
+            
+            // 立即更新狀態
+            student.points = newPoints;
+            
+            // 立即更新UI
+            const pointsEl = getEl(`points-${studentId}`);
+            if (pointsEl) {
+                pointsEl.textContent = newPoints;
+                // 添加同步中指示器
+                addSyncIndicator(studentId, 'syncing');
+            }
+            
+            return { oldPoints, newPoints };
+        };
+
+        const rollbackStudentPoints = (studentId, oldPoints) => {
+            const student = state.students.find(s => s.id === studentId);
+            if (!student) return;
+            
+            student.points = oldPoints;
+            const pointsEl = getEl(`points-${studentId}`);
+            if (pointsEl) {
+                pointsEl.textContent = oldPoints;
+                pointsEl.classList.add('error-flash');
+                setTimeout(() => pointsEl.classList.remove('error-flash'), 3000);
+            }
+        };
+
+        const addSyncIndicator = (studentId, status) => {
+            const card = document.querySelector(`[data-student-id="${studentId}"]`);
+            if (!card) return;
+            
+            let indicator = card.querySelector('.sync-indicator');
+            if (!indicator) {
+                indicator = document.createElement('div');
+                indicator.className = 'sync-indicator absolute top-2 right-2 w-3 h-3 rounded-full';
+                card.appendChild(indicator);
+            }
+            
+            indicator.classList.remove('bg-yellow-400', 'bg-red-400', 'bg-green-400', 'animate-pulse');
+            
+            if (status === 'syncing') {
+                indicator.classList.add('bg-yellow-400', 'animate-pulse');
+            } else if (status === 'error') {
+                indicator.classList.add('bg-red-400');
+            } else if (status === 'success') {
+                indicator.classList.add('bg-green-400');
+                setTimeout(() => indicator.remove(), 1000);
+            }
+        };
+
+        const scheduleRetry = (operation, maxRetries = 3) => {
+            const retryItem = { ...operation, retryCount: 0, maxRetries };
+            state.retryQueue.push(retryItem);
+            executeRetry(retryItem);
+        };
+
+        const executeRetry = async (retryItem) => {
+            const delays = [30000, 120000, 300000]; // 30秒, 2分鐘, 5分鐘
+            
+            while (retryItem.retryCount < retryItem.maxRetries) {
+                await new Promise(resolve => setTimeout(resolve, delays[retryItem.retryCount] || 300000));
+                
+                try {
+                    retryItem.retryCount++;
+                    const result = await fetchFromGAS('updatePoints', {
+                        studentId: retryItem.studentId,
+                        behaviorName: retryItem.behaviorName,
+                        points: retryItem.points
+                    });
+                    
+                    if (result) {
+                        // 重試成功
+                        addSyncIndicator(retryItem.studentId, 'success');
+                        state.retryQueue = state.retryQueue.filter(item => item !== retryItem);
+                        return;
+                    }
+                } catch (error) {
+                    console.error(`重試失敗 (${retryItem.retryCount}/${retryItem.maxRetries}):`, error);
+                }
+            }
+            
+            // 所有重試都失敗
+            addSyncIndicator(retryItem.studentId, 'error');
+            state.retryQueue = state.retryQueue.filter(item => item !== retryItem);
+        };
+
+        // --- GAS API 呼叫 ---
+        async function fetchFromGAS(action, payload = {}, skipLoading = false) {
+            if (!state.gasUrl) {
+                alert('請先設定 GAS 網址！');
+                toggleModal(app.modals.settings, true);
+                return null;
+            }
+            
+            if (!skipLoading) setLoading(true);
+            try {
+                const response = await fetch(state.gasUrl, {
+                    method: 'POST',
+                    mode: 'cors',
+                    cache: 'no-cache',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify({ action, payload }),
+                    redirect: 'follow'
+                });
+                
+                const result = await response.json();
+
+                if (result.status === 'error') {
+                    throw new Error(`GAS Error: ${result.message}`);
+                }
+                return result.data;
+            } catch (error) {
+                console.error('Fetch GAS 失敗:', error);
+                if (!skipLoading) {
+                    alert(`與 Google Sheet 的連線發生錯誤：\n${error.message}\n\n請檢查您的 GAS 網址是否正確，以及試算表權限是否設定為「任何人」。`);
+                }
+                throw error;
+            } finally {
+                if (!skipLoading) setLoading(false);
+            }
+        }
+
+        // --- 渲染函式 ---
+        const setLoading = (isLoading) => {
+            state.isLoading = isLoading;
+            app.containers.initialPrompt.classList.toggle('hidden', !isLoading && state.students.length > 0);
+            app.containers.loadingText.classList.toggle('hidden', !isLoading);
+            app.containers.spinner.classList.toggle('hidden', !isLoading);
+        };
+        
+        const generateAvatar = (seed) => {
+            const S = (s) => { let h = 0; for(let i=0; i<s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0; return h; };
+            const R = (s) => { s = Math.sin(s) * 10000; return s - Math.floor(s); };
+            const seedNum = S(seed);
+            
+            const colors = ['#ff6384', '#36a2eb', '#ffce56', '#4bc0c0', '#9966ff', '#ff9f40'];
+            const bgColor = colors[Math.floor(R(seedNum) * colors.length)];
+            const eyeType = Math.floor(R(seedNum+1) * 3);
+            const mouthType = Math.floor(R(seedNum+2) * 3);
+            
+            let eyes = '';
+            if (eyeType === 0) eyes = `<circle cx="35" cy="40" r="8" fill="white"/><circle cx="35" cy="40" r="4" fill="black"/><circle cx="65" cy="40" r="8" fill="white"/><circle cx="65" cy="40" r="4" fill="black"/>`;
+            else if (eyeType === 1) eyes = `<rect x="28" y="35" width="15" height="10" fill="white" transform="rotate(-10 35 40)"/><rect x="60" y="35" width="15" height="10" fill="white" transform="rotate(10 65 40)"/>`;
+            else eyes = `<path d="M30 45 C 35 35, 45 35, 50 45" stroke="white" stroke-width="6" fill="none"/><path d="M55 45 C 60 35, 70 35, 75 45" stroke="white" stroke-width="6" fill="none"/>`;
+
+            let mouth = '';
+            if (mouthType === 0) mouth = `<path d="M35 70 Q 50 85, 65 70" stroke="white" stroke-width="5" fill="none"/>`;
+            else if (mouthType === 1) mouth = `<rect x="40" y="70" width="20" height="8" fill="white" rx="3"/>`;
+            else mouth = `<circle cx="50" cy="75" r="10" fill="white"/>`;
+
+            return `data:image/svg+xml,${encodeURIComponent(`<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100" rx="20" fill="${bgColor}" />${eyes}${mouth}</svg>`)}`;
+        };
+
+        const switchTab = (tabName) => {
+            state.activeTab = tabName;
+            
+            // 更新分頁樣式
+            app.containers.studentsTab.classList.toggle('active-tab', tabName === 'students');
+            app.containers.groupsTab.classList.toggle('active-tab', tabName === 'groups');
+            
+            if (tabName !== 'students') {
+                app.containers.studentsTab.classList.remove('active-tab');
+                app.containers.studentsTab.style.backgroundColor = '#d1d5db'; // gray-300
+            }
+            if (tabName !== 'groups') {
+                app.containers.groupsTab.classList.remove('active-tab');
+                app.containers.groupsTab.style.backgroundColor = '#d1d5db'; // gray-300
+            }
+            
+            // 顯示/隱藏內容
+            app.containers.studentsView.classList.toggle('hidden', tabName !== 'students');
+            app.containers.groupsView.classList.toggle('hidden', tabName !== 'groups');
+            
+            if (tabName === 'groups') {
+                renderGroupsGrid();
+            }
+        };
+
+        const renderStudentGrid = () => {
+            app.containers.studentGrid.innerHTML = '';
+            if (state.students.length === 0 && !state.isLoading) {
+                 app.containers.initialPrompt.classList.remove('hidden');
+                 app.containers.loadingText.textContent = "班級裡還沒有學生喔！請在程式碼中更新 GAS 網址後，點擊 🧑‍🏫 管理學生。";
+                 app.containers.spinner.classList.add('hidden');
+                 return;
+            }
+            
+            let sortedStudents = [...state.students];
+            if (state.sortOrder === 'byName') {
+                sortedStudents.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+            } else if (state.sortOrder === 'byPoints') {
+                sortedStudents.sort((a, b) => b.points - a.points);
+            } else if (state.sortOrder === 'byGroup') {
+                // 先按分組排序，再按姓名排序
+                sortedStudents.sort((a, b) => {
+                    const groupA = a.group || ' '; // 無分組的放在最後
+                    const groupB = b.group || ' ';
+                    if (groupA === groupB) {
+                        return a.name.localeCompare(b.name, 'zh-Hant');
+                    }
+                    return groupA.localeCompare(groupB, 'zh-Hant');
+                });
+            }
+            
+            sortedStudents.forEach(student => {
+                const card = document.createElement('div');
+                card.className = 'student-card bg-white border-4 border-black rounded-lg p-3 flex flex-col items-center cursor-pointer pop-shadow relative';
+                card.dataset.studentId = student.id;
+
+                const pointChangeEl = document.createElement('div');
+                pointChangeEl.className = 'point-change-indicator absolute text-3xl font-anton font-bold pointer-events-none opacity-0';
+                
+                const avatar = document.createElement('img');
+                avatar.src = student.avatar;
+                avatar.alt = `${student.name} 的頭像`;
+                avatar.className = 'w-24 h-24 rounded-md border-2 border-black mb-2';
+
+                const nameContainer = document.createElement('div');
+                nameContainer.className = 'text-center w-full';
+                
+                if (student.group) {
+                    // 有分組時，顯示「分組名稱 學生姓名」
+                    nameContainer.innerHTML = `
+                        <p class="font-bold text-lg truncate">
+                            <span class="text-sm text-gray-600 font-normal">${student.group}</span>
+                            <span class="ml-1">${student.name}</span>
+                        </p>
+                    `;
+                } else {
+                    // 無分組時，只顯示學生姓名
+                    nameContainer.innerHTML = `
+                        <p class="font-bold text-center text-lg truncate w-full">${student.name}</p>
+                    `;
+                }
+
+                const points = document.createElement('p');
+                points.className = 'font-anton text-4xl text-blue-600';
+                points.textContent = student.points;
+                points.id = `points-${student.id}`;
+                
+                card.append(pointChangeEl, avatar, nameContainer, points);
+                card.addEventListener('click', () => {
+                    playSound(app.sounds.click);
+                    openPointsModal(student.id);
+                });
+                app.containers.studentGrid.appendChild(card);
+            });
+        };
+
+        const renderGroupsGrid = () => {
+            app.containers.groupsGrid.innerHTML = '';
+            
+            // 整理分組資料
+            const groups = {};
+            state.students.forEach(student => {
+                const groupName = student.group || '未分組';
+                if (!groups[groupName]) {
+                    groups[groupName] = [];
+                }
+                groups[groupName].push(student);
+            });
+            
+            if (Object.keys(groups).length === 0) {
+                app.containers.groupsGrid.innerHTML = '<p class="text-center text-gray-600 p-8 col-span-full">沒有分組資料。</p>';
+                return;
+            }
+            
+            const groupColors = [
+                'from-pink-300 to-purple-300',
+                'from-blue-300 to-indigo-300', 
+                'from-green-300 to-teal-300',
+                'from-yellow-300 to-orange-300',
+                'from-red-300 to-pink-300',
+                'from-purple-300 to-violet-300',
+                'from-cyan-300 to-blue-300',
+                'from-lime-300 to-green-300'
+            ];
+            
+            Object.entries(groups).forEach(([groupName, students], index) => {
+                const groupCard = document.createElement('div');
+                const colorClass = groupColors[index % groupColors.length];
+                groupCard.className = `group-card bg-gradient-to-br ${colorClass} border-4 border-black rounded-lg p-4 cursor-pointer pop-shadow`;
+                
+                const groupTitle = document.createElement('h3');
+                groupTitle.className = 'font-anton text-2xl mb-3 text-center';
+                groupTitle.textContent = groupName;
+                
+                const studentList = document.createElement('div');
+                studentList.className = 'mb-3';
+                
+                const totalPoints = students.reduce((sum, s) => sum + s.points, 0);
+                const avgPoints = students.length > 0 ? Math.round(totalPoints / students.length) : 0;
+                
+                students.forEach(student => {
+                    const studentItem = document.createElement('div');
+                    studentItem.className = 'flex justify-between items-center py-1 px-2 bg-white/30 rounded mb-1';
+                    studentItem.innerHTML = `
+                        <span class="font-bold">${student.name}</span>
+                        <span class="font-anton text-lg text-blue-600">${student.points}</span>
+                    `;
+                    studentList.appendChild(studentItem);
+                });
+                
+                const groupStats = document.createElement('div');
+                groupStats.className = 'text-center border-t-2 border-black pt-2';
+                groupStats.innerHTML = `
+                    <p class="text-sm"><span class="font-bold">人數:</span> ${students.length}</p>
+                    <p class="text-sm"><span class="font-bold">總分:</span> ${totalPoints}</p>
+                    <p class="text-sm"><span class="font-bold">平均:</span> ${avgPoints}</p>
+                `;
+                
+                groupCard.append(groupTitle, studentList, groupStats);
+                groupCard.addEventListener('click', () => {
+                    playSound(app.sounds.click);
+                    openGroupPointsModal(groupName, students);
+                });
+                
+                app.containers.groupsGrid.appendChild(groupCard);
+            });
+        };
+        
+        const renderStudentDeletionList = () => {
+            app.containers.deleteStudentList.innerHTML = '';
+            if (state.students.length === 0) {
+                app.containers.deleteStudentList.innerHTML = '<p class="text-center text-gray-600 p-4">目前沒有學生可刪除。</p>';
+                return;
+            }
+            
+            let sortedStudents = [...state.students].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+
+            sortedStudents.forEach(student => {
+                const item = document.createElement('div');
+                item.className = 'flex items-center justify-between bg-white/50 p-2 rounded-md';
+                item.innerHTML = `
+                    <span class="font-bold">${student.name}</span>
+                    <button data-id="${student.id}" class="delete-student-btn pop-button bg-red-500 text-white text-xs font-bold py-1 px-3 rounded-md border-2 border-black">刪除</button>
+                `;
+                app.containers.deleteStudentList.appendChild(item);
+            });
+            
+            // 為所有新的刪除按鈕加上事件監聽
+            document.querySelectorAll('.delete-student-btn').forEach(button => {
+                button.addEventListener('click', handleDeleteStudent);
+            });
+        };
+
+        // --- Modal 開啟/關閉邏輯 ---
+        const openManageStudentModal = () => {
+            playSound(app.sounds.click);
+            app.inputs.studentName.value = '';
+            renderStudentDeletionList();
+            toggleModal(app.modals.manageStudent, true);
+            app.inputs.studentName.focus();
+        };
+
+        const openGroupPointsModal = (groupName, students) => {
+            // 家長模式下不允許開啟分組點數modal
+            if (!state.isTeacherMode) return;
+            
+            state.currentGroupName = groupName;
+            state.currentStudentId = null;
+            
+            app.titles.pointsModal.textContent = `給 ${groupName} 點數`;
+            
+            app.containers.positiveBehaviors.innerHTML = '';
+            app.containers.negativeBehaviors.innerHTML = '';
+
+            state.behaviors.forEach(b => {
+                const btn = document.createElement('button');
+                const pointsText = b.points > 0 ? `+${b.points}` : b.points;
+                btn.className = `w-full pop-button pop-shadow-sm border-2 border-black rounded-md p-3 font-bold text-left flex justify-between items-center`;
+                btn.innerHTML = `<span>${b.name}</span> <span class="text-xl">${pointsText}</span>`;
+                
+                if (b.type === 'positive') {
+                    btn.classList.add('bg-green-400');
+                    app.containers.positiveBehaviors.appendChild(btn);
+                } else {
+                    btn.classList.add('bg-red-400');
+                    app.containers.negativeBehaviors.appendChild(btn);
+                }
+                btn.addEventListener('click', () => awardGroupPoints(b, students));
+            });
+            
+            // 隱藏歷史紀錄按鈕，因為這是分組模式
+            app.buttons.viewHistory.style.display = 'none';
+            
+            toggleModal(app.modals.points, true);
+        };
+
+        const awardGroupPoints = async (behavior, students) => {
+            const { name, points } = behavior;
+            playSound(points > 0 ? app.sounds.positive : app.sounds.negative);
+
+            // 立即關閉modal
+            toggleModal(app.modals.points, false);
+            
+            // 樂觀更新：立即更新所有學生分數
+            const oldPointsMap = new Map();
+            students.forEach(student => {
+                const result = updateStudentPointsOptimistic(student.id, Number(points));
+                if (result) {
+                    oldPointsMap.set(student.id, result.oldPoints);
+                }
+            });
+            
+            // 重新渲染畫面
+            if (state.activeTab === 'groups') {
+                renderGroupsGrid();
+            }
+            if (state.activeTab === 'students') {
+                renderStudentGrid();
+            }
+            
+            // 顯示成功提示
+            const successToast = document.createElement('div');
+            successToast.className = 'fixed top-4 right-4 bg-green-400 border-2 border-black text-white p-3 rounded-lg font-bold z-50';
+            successToast.textContent = `已為 ${state.currentGroupName} 的 ${students.length} 位學生加扣 ${points > 0 ? '+' : ''}${points} 分！`;
+            document.body.appendChild(successToast);
+            setTimeout(() => document.body.removeChild(successToast), 3000);
+            
+            // 背景批量同步到 Google Sheets
+            try {
+                // 準備批量更新資料
+                const updates = students.map(student => ({
+                    studentId: student.id,
+                    behaviorName: `[分組] ${name}`,
+                    points: Number(points)
+                }));
+                
+                // 批量更新分數
+                const data = await fetchFromGAS('updateMultiplePoints', { updates }, true); // skipLoading = true
+                
+                if (data && data.updatedStudents) {
+                    // 同步成功，為所有學生添加成功指示器
+                    students.forEach(student => {
+                        addSyncIndicator(student.id, 'success');
+                    });
+                    
+                    // 檢查並修正任何不一致的數據
+                    data.updatedStudents.forEach(updated => {
+                        const stateStudent = state.students.find(s => s.id === updated.studentId);
+                        if (stateStudent && stateStudent.points !== updated.newPoints) {
+                            stateStudent.points = updated.newPoints;
+                            const pointsEl = getEl(`points-${updated.studentId}`);
+                            if (pointsEl) pointsEl.textContent = updated.newPoints;
+                        }
+                    });
+                    
+                    // 重新渲染以反映任何修正
+                    if (state.activeTab === 'groups') {
+                        renderGroupsGrid();
+                    }
+                    if (state.activeTab === 'students') {
+                        renderStudentGrid();
+                    }
+                } else {
+                    throw new Error('批量同步失敗');
+                }
+            } catch (error) {
+                console.error('批量更新分數失敗:', error);
+                
+                // 回滾所有學生的分數
+                students.forEach(student => {
+                    const oldPoints = oldPointsMap.get(student.id);
+                    if (oldPoints !== undefined) {
+                        rollbackStudentPoints(student.id, oldPoints);
+                        addSyncIndicator(student.id, 'error');
+                        
+                        // 安排個別重試
+                        scheduleRetry({
+                            studentId: student.id,
+                            behaviorName: `[分組] ${name}`,
+                            points: Number(points)
+                        });
+                    }
+                });
+                
+                // 重新渲染
+                if (state.activeTab === 'groups') {
+                    renderGroupsGrid();
+                }
+                if (state.activeTab === 'students') {
+                    renderStudentGrid();
+                }
+                
+                // 顯示錯誤提示
+                const errorToast = document.createElement('div');
+                errorToast.className = 'fixed top-4 right-4 bg-red-400 border-2 border-black text-white p-3 rounded-lg font-bold z-50';
+                errorToast.textContent = '批量同步失敗，將自動重試';
+                document.body.appendChild(errorToast);
+                setTimeout(() => document.body.removeChild(errorToast), 3000);
+            }
+        };
+
+        const openPointsModal = (studentId) => {
+            // 家長模式下不允許開啟點數modal
+            if (!state.isTeacherMode) return;
+            
+            state.currentStudentId = studentId;
+            state.currentGroupName = null;
+            const student = state.students.find(s => s.id === studentId);
+            if (!student) return;
+
+            app.titles.pointsModal.textContent = `給 ${student.name} 點數`;
+            
+            // 顯示歷史紀錄按鈕
+            app.buttons.viewHistory.style.display = 'inline-block';
+            
+            app.containers.positiveBehaviors.innerHTML = '';
+            app.containers.negativeBehaviors.innerHTML = '';
+
+            state.behaviors.forEach(b => {
+                const btn = document.createElement('button');
+                const pointsText = b.points > 0 ? `+${b.points}` : b.points;
+                btn.className = `w-full pop-button pop-shadow-sm border-2 border-black rounded-md p-3 font-bold text-left flex justify-between items-center`;
+                btn.innerHTML = `<span>${b.name}</span> <span class="text-xl">${pointsText}</span>`;
+                
+                if (b.type === 'positive') {
+                    btn.classList.add('bg-green-400');
+                    app.containers.positiveBehaviors.appendChild(btn);
+                } else {
+                    btn.classList.add('bg-red-400');
+                    app.containers.negativeBehaviors.appendChild(btn);
+                }
+                btn.addEventListener('click', () => awardPoints(b));
+            });
+            toggleModal(app.modals.points, true);
+        };
+
+        const awardPoints = async (behavior) => {
+            const { name, points } = behavior;
+            playSound(points > 0 ? app.sounds.positive : app.sounds.negative);
+
+            // 立即關閉modal，不再阻擋用戶操作
+            toggleModal(app.modals.points, false);
+
+            // 顯示點數變化動畫
+            const studentCard = document.querySelector(`[data-student-id="${state.currentStudentId}"]`);
+            if(studentCard) {
+                const indicator = studentCard.querySelector('.point-change-indicator');
+                indicator.textContent = points > 0 ? `+${points}` : points;
+                indicator.className = 'point-change-indicator absolute text-3xl font-anton font-bold pointer-events-none opacity-0';
+                void indicator.offsetWidth;
+                indicator.classList.add(points > 0 ? 'point-change-up' : 'point-change-down');
+            }
+
+            // 樂觀更新：立即更新畫面分數
+            const optimisticResult = updateStudentPointsOptimistic(state.currentStudentId, Number(points));
+            if (!optimisticResult) return;
+
+            const { oldPoints } = optimisticResult;
+
+            // 背景同步到 Google Sheets (不阻擋UI)
+            try {
+                const data = await fetchFromGAS('updatePoints', { 
+                    studentId: state.currentStudentId, 
+                    behaviorName: name, 
+                    points: Number(points) 
+                }, true); // skipLoading = true
+                
+                if (data) {
+                    // 同步成功
+                    addSyncIndicator(state.currentStudentId, 'success');
+                    // 確保伺服器返回的分數與本地一致
+                    const student = state.students.find(s => s.id === data.studentId);
+                    if (student && student.points !== data.newPoints) {
+                        // 如果不一致，以伺服器為準
+                        student.points = data.newPoints;
+                        const pointsEl = getEl(`points-${data.studentId}`);
+                        if (pointsEl) pointsEl.textContent = data.newPoints;
+                    }
+                } else {
+                    throw new Error('同步失敗');
+                }
+            } catch (error) {
+                console.error('同步到Google Sheets失敗:', error);
+                
+                // 回滾操作
+                rollbackStudentPoints(state.currentStudentId, oldPoints);
+                addSyncIndicator(state.currentStudentId, 'error');
+                
+                // 安排重試
+                scheduleRetry({
+                    studentId: state.currentStudentId,
+                    behaviorName: name,
+                    points: Number(points)
+                });
+                
+                // 顯示溫和的錯誤提示
+                const errorToast = document.createElement('div');
+                errorToast.className = 'fixed top-4 right-4 bg-red-400 border-2 border-black text-white p-3 rounded-lg font-bold z-50';
+                errorToast.textContent = '同步失敗，將自動重試';
+                document.body.appendChild(errorToast);
+                setTimeout(() => document.body.removeChild(errorToast), 3000);
+            }
+        };
+        
+        const openHistoryModal = async () => {
+            const student = state.students.find(s => s.id === state.currentStudentId);
+            app.titles.historyModal.textContent = `${student.name} 的歷史紀錄`;
+            app.containers.historyList.innerHTML = '<p>載入中...</p>';
+            toggleModal(app.modals.history, true);
+            
+            const history = await fetchFromGAS('getHistory', { studentId: state.currentStudentId });
+            if (history) {
+                app.containers.historyList.innerHTML = '';
+                if (history.length === 0) {
+                    app.containers.historyList.innerHTML = '<p class="text-center p-4">沒有任何紀錄。</p>';
+                    return;
+                }
+                history.forEach(log => {
+                    const item = document.createElement('div');
+                    item.className = `p-2 rounded-md mb-2 flex justify-between items-center ${log.points > 0 ? 'bg-green-200' : 'bg-red-200'}`;
+                    const pointsText = log.points > 0 ? `+${log.points}` : log.points;
+                    item.innerHTML = `
+                        <div>
+                            <p class="font-bold">${log.behaviorName}</p>
+                            <p class="text-sm text-gray-600">${log.timestamp}</p>
+                        </div>
+                        <p class="font-anton text-2xl ${log.points > 0 ? 'text-green-700' : 'text-red-700'}">${pointsText}</p>
+                    `;
+                    app.containers.historyList.appendChild(item);
+                });
+            }
+        };
+
+        const openManageBehaviorsModal = () => {
+            app.containers.behaviorListEditor.innerHTML = '';
+            state.behaviors.forEach((b, index) => {
+                addBehaviorEditorRow(b, index);
+            });
+            toggleModal(app.modals.manageBehaviors, true);
+        };
+
+        const addBehaviorEditorRow = (behavior = { name: '', points: 1, type: 'positive' }, index) => {
+            const div = document.createElement('div');
+            div.className = 'flex items-center gap-2 p-2 bg-white/60 rounded-md border-2 border-black';
+            div.innerHTML = `
+                <input type="text" value="${behavior.name}" class="behavior-name-input flex-grow p-2 border-2 border-black rounded-md" placeholder="行為名稱">
+                <input type="number" value="${behavior.points}" class="behavior-points-input w-20 p-2 border-2 border-black rounded-md" placeholder="點數">
+                <select class="behavior-type-select p-2 border-2 border-black rounded-md bg-white">
+                    <option value="positive" ${behavior.type === 'positive' ? 'selected' : ''}>加分</option>
+                    <option value="negative" ${behavior.type === 'negative' ? 'selected' : ''}>扣分</option>
+                </select>
+                <button class="remove-behavior-btn text-red-600 font-bold text-2xl p-1 hover:bg-red-200 rounded-full">✖</button>
+            `;
+            app.containers.behaviorListEditor.appendChild(div);
+            div.querySelector('.remove-behavior-btn').addEventListener('click', () => div.remove());
+        };
+
+        // --- 圖片壓縮功能 ---
+        const compressImage = (file, maxWidth = 200) => {
+            return new Promise((resolve) => {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                const img = new Image();
+                
+                img.onload = () => {
+                    // 計算壓縮後的尺寸
+                    const ratio = Math.min(maxWidth / img.width, maxWidth / img.height);
+                    const newWidth = img.width * ratio;
+                    const newHeight = img.height * ratio;
+                    
+                    // 設定canvas尺寸
+                    canvas.width = newWidth;
+                    canvas.height = newHeight;
+                    
+                    // 繪製壓縮後的圖片
+                    ctx.drawImage(img, 0, 0, newWidth, newHeight);
+                    
+                    // 轉換為base64
+                    const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+                    resolve(compressedDataUrl);
+                };
+                
+                img.src = URL.createObjectURL(file);
+            });
+        };
+
+        // --- 頭像管理功能 ---
+        const openAvatarsModal = () => {
+            playSound(app.sounds.click);
+            renderAvatarGrid();
+            toggleModal(app.modals.manageAvatars, true);
+        };
+
+        const renderAvatarGrid = () => {
+            app.containers.avatarGrid.innerHTML = '';
+            
+            if (state.students.length === 0) {
+                app.containers.avatarGrid.innerHTML = '<p class="text-center text-gray-600 p-8 col-span-full">目前沒有學生資料。</p>';
+                return;
+            }
+            
+            // 按名字排序
+            const sortedStudents = [...state.students].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+            
+            sortedStudents.forEach(student => {
+                const avatarCard = document.createElement('div');
+                avatarCard.className = 'bg-white border-2 border-black rounded-lg p-3 text-center cursor-pointer hover:bg-gray-50 transition-colors';
+                avatarCard.innerHTML = `
+                    <div class="relative mb-2">
+                        <img src="${student.avatar}" alt="${student.name}" class="w-16 h-16 mx-auto rounded-md border-2 border-gray-300">
+                        <div class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-0 hover:bg-opacity-30 transition-all rounded-md">
+                            <span class="text-white text-xs opacity-0 hover:opacity-100">點擊上傳</span>
+                        </div>
+                    </div>
+                    <p class="font-bold text-sm">${student.name}</p>
+                    <p class="text-xs text-gray-500">${student.group || '未分組'}</p>
+                `;
+                
+                avatarCard.addEventListener('click', () => {
+                    state.currentUploadingStudentId = student.id;
+                    app.inputs.avatarFile.click();
+                });
+                
+                app.containers.avatarGrid.appendChild(avatarCard);
+            });
+        };
+
+        const handleAvatarUpload = async (event) => {
+            const file = event.target.files[0];
+            if (!file || !state.currentUploadingStudentId) return;
+            
+            const student = state.students.find(s => s.id === state.currentUploadingStudentId);
+            if (!student) return;
+            
+            try {
+                // 顯示上傳中狀態
+                const uploadToast = document.createElement('div');
+                uploadToast.className = 'fixed top-4 right-4 bg-blue-400 border-2 border-black text-white p-3 rounded-lg font-bold z-50';
+                uploadToast.textContent = `正在為 ${student.name} 上傳頭像...`;
+                document.body.appendChild(uploadToast);
+                
+                // 壓縮圖片
+                const compressedImage = await compressImage(file, 200);
+                
+                // 更新學生頭像（樂觀更新）
+                const oldAvatar = student.avatar;
+                student.avatar = compressedImage;
+                
+                // 立即更新UI
+                renderAvatarGrid();
+                renderStudentGrid();
+                
+                // 同步到Google Sheets
+                const result = await fetchFromGAS('updateStudentAvatar', {
+                    studentId: state.currentUploadingStudentId,
+                    avatar: compressedImage
+                }, true);
+                
+                document.body.removeChild(uploadToast);
+                
+                if (result && result.success) {
+                    // 成功提示
+                    const successToast = document.createElement('div');
+                    successToast.className = 'fixed top-4 right-4 bg-green-400 border-2 border-black text-white p-3 rounded-lg font-bold z-50';
+                    successToast.textContent = `${student.name} 的頭像已更新！`;
+                    document.body.appendChild(successToast);
+                    setTimeout(() => document.body.removeChild(successToast), 3000);
+                    
+                    // 清除快取
+                    clearCache();
+                } else {
+                    throw new Error('上傳失敗');
+                }
+                
+            } catch (error) {
+                console.error('頭像上傳失敗:', error);
+                
+                // 回復原頭像
+                student.avatar = oldAvatar;
+                renderAvatarGrid();
+                renderStudentGrid();
+                
+                // 錯誤提示
+                const errorToast = document.createElement('div');
+                errorToast.className = 'fixed top-4 right-4 bg-red-400 border-2 border-black text-white p-3 rounded-lg font-bold z-50';
+                errorToast.textContent = `${student.name} 頭像上傳失敗`;
+                document.body.appendChild(errorToast);
+                setTimeout(() => document.body.removeChild(errorToast), 3000);
+            }
+            
+            // 清除文件選擇
+            event.target.value = '';
+            state.currentUploadingStudentId = null;
+        };
+
+        // --- 事件處理 ---
+        const handleAddStudents = async () => {
+            const lines = app.inputs.studentName.value.trim().split('\n').map(n => n.trim()).filter(n => n);
+            if (lines.length > 0) {
+                playSound(app.sounds.click);
+                const studentsPayload = lines.map(line => {
+                    // 支援 tab 或逗號分隔的姓名+分組格式
+                    let name, group = '';
+                    if (line.includes('\t')) {
+                        [name, group] = line.split('\t').map(s => s.trim());
+                    } else if (line.includes(',')) {
+                        [name, group] = line.split(',').map(s => s.trim());
+                    } else {
+                        name = line;
+                    }
+                    return { name, group, avatar: generateAvatar(name) };
+                });
+                const newStudents = await fetchFromGAS('addMultipleStudents', { students: studentsPayload });
+                if (newStudents) {
+                    state.students.push(...newStudents);
+                    
+                    // 如果這是第一次新增學生，顯示分頁
+                    if (state.students.length === newStudents.length) {
+                        app.containers.tabsContainer.classList.remove('hidden');
+                    }
+                    
+                    renderStudentGrid();
+                    renderStudentDeletionList();
+                    app.inputs.studentName.value = '';
+                    
+                    // 清除快取，確保資料同步
+                    clearCache();
+                    
+                    alert(`${lines.length} 位學生已成功新增！`);
+                }
+            } else {
+                alert('請至少輸入一位學生姓名！');
+            }
+        };
+        
+        const handleDeleteStudent = async (event) => {
+            const studentId = event.target.dataset.id;
+            const student = state.students.find(s => s.id === studentId);
+            if (!student) return;
+
+            playSound(app.sounds.negative);
+            if (confirm(`確定要刪除學生「${student.name}」嗎？此操作無法復原。`)) {
+                const result = await fetchFromGAS('deleteStudent', { studentId });
+                if (result && result.deletedStudentId) {
+                    state.students = state.students.filter(s => s.id !== result.deletedStudentId);
+                    renderStudentGrid();
+                    renderStudentDeletionList();
+                    
+                    // 清除快取，確保資料同步
+                    clearCache();
+                    
+                    alert(`學生「${student.name}」已刪除。`);
+                }
+            }
+        };
+
+        // --- 家長模式連結生成功能 ---
+        const generateParentLink = () => {
+            const currentUrl = window.location.href.split('?')[0]; // 移除現有參數
+            return currentUrl; // 預設就是家長模式，不需要參數
+        };
+
+        const openParentLinkModal = () => {
+            playSound(app.sounds.click);
+            const parentUrl = generateParentLink();
+            
+            // 設定網址顯示
+            getEl('parent-url-display').value = parentUrl;
+            
+            // 生成QR碼
+            const canvas = getEl('qr-canvas');
+            try {
+                // 檢查QR碼庫是否載入
+                if (typeof qrcode === 'undefined') {
+                    throw new Error('QR碼庫未載入');
+                }
+                
+                // 使用qrcode-generator庫
+                const qr = qrcode(0, 'M');
+                qr.addData(parentUrl);
+                qr.make();
+                
+                // 設定canvas大小
+                canvas.width = 200;
+                canvas.height = 200;
+                const ctx = canvas.getContext('2d');
+                
+                // 清除canvas
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, 200, 200);
+                
+                // 繪製QR碼
+                const modules = qr.getModuleCount();
+                const cellSize = 200 / modules;
+                
+                ctx.fillStyle = '#000000';
+                for (let row = 0; row < modules; row++) {
+                    for (let col = 0; col < modules; col++) {
+                        if (qr.isDark(row, col)) {
+                            ctx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
+                        }
+                    }
+                }
+                
+            } catch (error) {
+                console.error('QR碼生成失敗:', error);
+                // 顯示錯誤訊息
+                canvas.width = 200;
+                canvas.height = 200;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#f3f4f6';
+                ctx.fillRect(0, 0, 200, 200);
+                ctx.fillStyle = '#374151';
+                ctx.font = '14px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('QR碼生成失敗', 100, 90);
+                ctx.fillText('請複製連結使用', 100, 110);
+            }
+            
+            toggleModal(app.modals.parentLink, true);
+        };
+
+        const copyParentUrl = async () => {
+            const urlInput = getEl('parent-url-display');
+            try {
+                await navigator.clipboard.writeText(urlInput.value);
+                const btn = app.buttons.copyParentUrl;
+                const originalText = btn.textContent;
+                btn.textContent = '✅ 已複製！';
+                btn.style.backgroundColor = '#10b981';
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.style.backgroundColor = '';
+                }, 2000);
+                playSound(app.sounds.positive);
+            } catch (error) {
+                console.error('複製失敗:', error);
+                // 備用方案：選取文字
+                urlInput.select();
+                urlInput.setSelectionRange(0, 99999);
+                try {
+                    document.execCommand('copy');
+                    alert('連結已複製到剪貼簿！');
+                } catch (e) {
+                    alert('複製失敗，請手動複製連結。');
+                }
+            }
+        };
+
+        // --- 事件監聽 ---
+        // 教師模式按鈕（只在教師模式下顯示）
+        if (state.isTeacherMode) {
+            app.buttons.parentLink.addEventListener('click', openParentLinkModal);
+            app.buttons.copyParentUrl.addEventListener('click', copyParentUrl);
+            app.buttons.closeParentLink.addEventListener('click', () => toggleModal(app.modals.parentLink, false));
+        } else {
+            // 家長模式下隱藏管理相關按鈕
+            app.buttons.parentLink.style.display = 'none';
+            app.buttons.teacherPanel.style.display = 'none';
+            app.buttons.help.style.display = 'none';
+        }
+        
+        // 分頁切換
+        app.containers.studentsTab.addEventListener('click', () => {
+            playSound(app.sounds.click);
+            switchTab('students');
+        });
+        app.containers.groupsTab.addEventListener('click', () => {
+            playSound(app.sounds.click);
+            switchTab('groups');
+        });
+        
+        app.buttons.sort.addEventListener('click', () => {
+            playSound(app.sounds.click);
+            // 循環切換排序方式：姓名 -> 分數 -> 分組 -> 姓名
+            if (state.sortOrder === 'byName') {
+                state.sortOrder = 'byPoints';
+            } else if (state.sortOrder === 'byPoints') {
+                state.sortOrder = 'byGroup';
+            } else {
+                state.sortOrder = 'byName';
+            }
+            
+            // 更新排序按鈕顯示
+            const sortButton = app.buttons.sort;
+            if (state.sortOrder === 'byName') {
+                sortButton.textContent = '★'; // 星記號表示按姓名
+                sortButton.title = '目前：按姓名排序，點擊切換為按分數排序';
+            } else if (state.sortOrder === 'byPoints') {
+                sortButton.textContent = '↑'; // 上箭頭表示按分數
+                sortButton.title = '目前：按分數排序，點擊切換為按分組排序';
+            } else {
+                sortButton.textContent = '📊'; // 圖表表示按分組
+                sortButton.title = '目前：按分組排序，點擊切換為按姓名排序';
+            }
+            
+            renderStudentGrid();
+        });
+
+        app.buttons.teacherPanel.addEventListener('click', () => {
+            playSound(app.sounds.click);
+            if (!app.containers.controlPanel.classList.contains('hidden')) {
+                app.containers.controlPanel.classList.add('hidden');
+                app.containers.controlPanel.classList.remove('flex');
+            } else {
+                app.containers.controlPanel.classList.remove('hidden');
+                app.containers.controlPanel.classList.add('flex');
+            }
+        });
+
+        
+        // app.buttons.settings.addEventListener('click', () => {
+        //     playSound(app.sounds.click);
+        //     app.inputs.gasUrl.value = state.gasUrl;
+        //     toggleModal(app.modals.settings, true);
+        // }); // 已禁用設定功能
+        // app.buttons.cancelSettings.addEventListener('click', () => toggleModal(app.modals.settings, false)); // 已禁用設定功能
+        // app.buttons.saveSettings.addEventListener('click', () => {
+        //     playSound(app.sounds.click);
+        //     state.gasUrl = app.inputs.gasUrl.value.trim();
+        //     localStorage.setItem('gasUrl', state.gasUrl);
+        //     toggleModal(app.modals.settings, false);
+        //     init();
+        // }); // 已禁用設定功能
+
+        app.buttons.help.addEventListener('click', () => {
+            playSound(app.sounds.click);
+            toggleModal(app.modals.help, true);
+        });
+        app.buttons.closeHelp.addEventListener('click', () => toggleModal(app.modals.help, false));
+        
+        app.buttons.copyGasCode.addEventListener('click', () => {
+            const code = getEl('gas-code-block').innerText;
+            navigator.clipboard.writeText(code).then(() => {
+                app.buttons.copyGasCode.textContent = '已複製！';
+                setTimeout(() => { app.buttons.copyGasCode.textContent = '複製'; }, 2000);
+            }).catch(err => alert('複製失敗: ' + err));
+        });
+
+        app.buttons.manageStudent.addEventListener('click', openManageStudentModal);
+        app.buttons.closeManageStudent.addEventListener('click', () => toggleModal(app.modals.manageStudent, false));
+        app.buttons.confirmAddStudent.addEventListener('click', handleAddStudents);
+        
+        app.buttons.manageAvatars.addEventListener('click', openAvatarsModal);
+        app.buttons.closeAvatars.addEventListener('click', () => toggleModal(app.modals.manageAvatars, false));
+        app.inputs.avatarFile.addEventListener('change', handleAvatarUpload);
+
+        app.buttons.exportGrades.addEventListener('click', () => {
+            playSound(app.sounds.click);
+            toggleModal(app.modals.export, true);
+        });
+        app.buttons.cancelExport.addEventListener('click', () => {
+            toggleModal(app.modals.export, false);
+        });
+        app.buttons.exportOriginal.addEventListener('click', () => {
+            playSound(app.sounds.click);
+            const originalOrderStudents = [...state.students].sort((a, b) => {
+                const groupA = a.group || '未分組';
+                const groupB = b.group || '未分組';
+                if (groupA === groupB) {
+                    return a.name.localeCompare(b.name, 'zh-Hant');
+                }
+                return groupA.localeCompare(groupB, 'zh-Hant');
+            });
+            const filename = `${state.className}_成績(分組姓名順序).csv`;
+            exportToCsv(originalOrderStudents, filename);
+            toggleModal(app.modals.export, false);
+        });
+        app.buttons.exportSorted.addEventListener('click', () => {
+            playSound(app.sounds.click);
+            const sortedStudents = [...state.students].sort((a, b) => b.points - a.points);
+            const filename = `${state.className}_成績(分數排序).csv`;
+            exportToCsv(sortedStudents, filename);
+            toggleModal(app.modals.export, false);
+        });
+
+        app.buttons.closePoints.addEventListener('click', () => toggleModal(app.modals.points, false));
+        app.buttons.viewHistory.addEventListener('click', () => {
+            playSound(app.sounds.click);
+            toggleModal(app.modals.points, false);
+            openHistoryModal();
+        });
+        app.buttons.closeHistory.addEventListener('click', () => toggleModal(app.modals.history, false));
+
+        app.buttons.resetPoints.addEventListener('click', async () => {
+            playSound(app.sounds.negative);
+            if (confirm('確定要將所有學生的點數重設為 0 嗎？此操作無法復原。')) {
+                const result = await fetchFromGAS('resetAllPoints');
+                if (result && result.success) {
+                    state.students.forEach(s => s.points = 0);
+                    renderStudentGrid();
+                    
+                    // 清除快取，確保資料同步
+                    clearCache();
+                    
+                    alert('所有點數已成功重設！');
+                }
+            }
+        });
+        
+        app.buttons.manageBehaviors.addEventListener('click', () => {
+            playSound(app.sounds.click);
+            openManageBehaviorsModal();
+        });
+        app.buttons.cancelBehaviors.addEventListener('click', () => toggleModal(app.modals.manageBehaviors, false));
+        app.buttons.addNewBehavior.addEventListener('click', () => addBehaviorEditorRow());
+        app.buttons.saveBehaviors.addEventListener('click', async () => {
+            const newBehaviors = [];
+            const rows = app.containers.behaviorListEditor.querySelectorAll('.flex.items-center.gap-2');
+            let isValid = true;
+            rows.forEach(row => {
+                const name = row.querySelector('.behavior-name-input').value.trim();
+                const points = row.querySelector('.behavior-points-input').value;
+                const type = row.querySelector('.behavior-type-select').value;
+                if (!name || points === '') {
+                    isValid = false;
+                }
+                newBehaviors.push({ name: name, points: Number(points), type: type });
+            });
+
+            if (!isValid) {
+                alert('行為名稱和點數不能為空！');
+                return;
+            }
+            
+            playSound(app.sounds.click);
+            const result = await fetchFromGAS('manageBehaviors', { behaviors: newBehaviors });
+            if (result && result.success) {
+                state.behaviors = newBehaviors;
+                toggleModal(app.modals.manageBehaviors, false);
+                
+                // 清除快取，確保資料同步
+                clearCache();
+                
+                alert('行為項目已更新！');
+            }
+        });
+
+        // --- 初始化 ---
+        const init = async (forceRefresh = false) => {
+            if (state.gasUrl && state.gasUrl !== 'demo') {
+                app.containers.setupPrompt.classList.add('hidden');
+                
+                // 首先嘗試載入快取資料
+                if (!forceRefresh) {
+                    const cachedData = loadFromCache();
+                    if (cachedData) {
+                        console.log('從快取載入資料');
+                        state.className = cachedData.className;
+                        state.students = cachedData.students || [];
+                        state.behaviors = cachedData.behaviors || [];
+                        app.titles.className.textContent = state.className;
+                        
+                        // 如果有學生，顯示分頁
+                        if (state.students.length > 0) {
+                            app.containers.tabsContainer.classList.remove('hidden');
+                        }
+                        
+                        renderStudentGrid();
+                        setLoading(false);
+                        
+                        // 顯示快取載入成功的提示
+                        showCacheToast('快取載入完成！背景檢查更新中...');
+                        
+                        // 背景檢查更新
+                        setTimeout(() => loadDataFromServer(true), 100);
+                        return;
+                    }
+                }
+                
+                // 沒有快取或強制刷新，顯示載入動畫
+                setLoading(true);
+                await loadDataFromServer(false);
+                
+            } else {
+                setLoading(false);
+                app.containers.initialPrompt.classList.remove('hidden');
+                app.containers.loadingText.classList.add('hidden');
+                app.containers.spinner.classList.add('hidden');
+                app.containers.setupPrompt.classList.remove('hidden');
+            }
+        };
+
+        const loadDataFromServer = async (isBackgroundUpdate = false) => {
+            try {
+                const data = await fetchFromGAS('loadData', {}, isBackgroundUpdate);
+                if (data) {
+                    // 檢查資料是否有變更
+                    const cachedData = loadFromCache();
+                    const hasChanged = !cachedData || 
+                                     JSON.stringify(data.students) !== JSON.stringify(cachedData.students) ||
+                                     JSON.stringify(data.behaviors) !== JSON.stringify(cachedData.behaviors) ||
+                                     data.className !== cachedData.className;
+                    
+                    if (hasChanged || !isBackgroundUpdate) {
+                        state.className = data.className;
+                        state.students = data.students || [];
+                        state.behaviors = data.behaviors || [];
+                        app.titles.className.textContent = state.className;
+                        
+                        // 如果有學生，顯示分頁
+                        if (state.students.length > 0) {
+                            app.containers.tabsContainer.classList.remove('hidden');
+                        }
+                        
+                        renderStudentGrid();
+                        
+                        // 儲存到快取
+                        saveToCache(data);
+                        
+                        if (isBackgroundUpdate && hasChanged) {
+                            showCacheToast('資料已更新！');
+                        }
+                    } else if (isBackgroundUpdate) {
+                        console.log('背景檢查：資料無變更');
+                    }
+                    
+                } else if (!isBackgroundUpdate) {
+                    app.containers.setupPrompt.classList.remove('hidden');
+                    app.containers.setupPrompt.textContent = "載入失敗，請檢查程式碼中的 GAS 網址是否正確。";
+                }
+            } catch (error) {
+                console.error('載入資料失敗:', error);
+                if (isBackgroundUpdate) {
+                    showCacheToast('背景更新失敗，將使用快取資料', true);
+                } else {
+                    app.containers.setupPrompt.classList.remove('hidden');
+                    app.containers.setupPrompt.textContent = "載入失敗，請檢查程式碼中的 GAS 網址是否正確。";
+                }
+            }
+        };
+
+        init();
+    });
+    </script>
+</body>
+</html>
